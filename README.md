@@ -68,6 +68,22 @@ uvicorn app.web:app --host 127.0.0.1 --port 8000          # админка: http
 - держите его только в `.env` (файл в `.gitignore`), не вставляйте в код, чаты и issue;
 - если токен где-то засветился — `/revoke` в BotFather выдаст новый, старый перестанет работать.
 
+### Запуск на сервере в Docker
+
+```bash
+cp .env.example .env        # впишите BOT_TOKEN, ADMIN_PASSWORD, ADMIN_IDS, BUSINESS_NAME
+docker compose up -d --build
+docker compose logs -f bot  # убедиться, что бот запустился
+```
+
+Поднимутся два контейнера (`bot` и `admin`) с общей базой в томе `data`; перезапускаются сами.
+Админка слушает только `127.0.0.1:8000`: наружу публикуйте её через HTTPS-прокси (Caddy, nginx)
+или ходите через SSH-туннель (`ssh -L 8000:127.0.0.1:8000 user@server`). Резервная копия базы:
+`docker compose cp bot:/data/booking.db ./backup.db`. Файл `.env` в образ не попадает.
+
+> Образ собран по инструкции, но в этой среде Docker-демона нет, так что сборка здесь не запускалась;
+> конфигурация compose проверена командой `docker compose config`.
+
 ## Предоплата
 
 1. В [@BotFather](https://t.me/BotFather): `/mybots` → ваш бот → **Payments** → выберите платёжного

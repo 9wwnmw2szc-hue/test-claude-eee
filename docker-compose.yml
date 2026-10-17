@@ -1,0 +1,25 @@
+# Запуск: cp .env.example .env  (заполнить), затем  docker compose up -d --build
+# Бот и админка — два контейнера с общей базой в томе `data`.
+x-app: &app
+  build: .
+  env_file: .env
+  environment:
+    DATABASE_URL: sqlite:////data/booking.db   # перекрывает значение из .env
+  volumes:
+    - data:/data
+  restart: unless-stopped
+
+services:
+  bot:
+    <<: *app
+    command: python -m app.bot
+
+  admin:
+    <<: *app
+    command: uvicorn app.web:app --host 0.0.0.0 --port 8000
+    ports:
+      # Только локальный интерфейс: наружу — через HTTPS-прокси (Caddy/nginx) или SSH-туннель
+      - "127.0.0.1:8000:8000"
+
+volumes:
+  data:
