@@ -331,6 +331,24 @@ def mark_no_show(session: Session, booking_id: int, now: datetime) -> Booking:
     return _close_visit(session, booking_id, now, NO_SHOW)
 
 
+def auto_close_visits(session: Session, now: datetime, after_hours: int) -> list[Booking]:
+    """Неотмеченные подтверждённые визиты, закончившиеся более after_hours часов назад, считаем состоявшимися.
+
+    Не пришедшего клиента система угадать не может, поэтому «не пришёл» остаётся ручной отметкой
+    администратора; автоотметка лишь не даёт забытым визитам выпасть из выручки и оценок.
+    """
+    if after_hours <= 0:
+        return []
+    stmt = select(Booking).where(
+        Booking.status == ACTIVE, Booking.end_at <= now - timedelta(hours=after_hours)
+    )
+    closed = list(session.scalars(stmt))
+    for b in closed:
+        b.status = DONE
+    session.flush()
+    return closed
+
+
 def due_review_requests(
     session: Session, now: datetime, within_days: int = 3
 ) -> list[Booking]:

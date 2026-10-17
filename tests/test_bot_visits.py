@@ -199,7 +199,7 @@ def test_no_show_gets_no_review_request(bot_env, session, monkeypatch):
 
 
 def test_maintenance_loop_runs_all_jobs(bot_env, monkeypatch):
-    """Цикл вызывает все три фоновые задачи и переживает ошибку в одной из них."""
+    """Цикл вызывает все фоновые задачи и переживает ошибку в одной из них."""
     env = bot_env()
     ran = []
 
@@ -212,6 +212,7 @@ def test_maintenance_loop_runs_all_jobs(bot_env, monkeypatch):
 
     monkeypatch.setattr(bot_module, "send_due_reminders", lambda bot: boom(bot))
     monkeypatch.setattr(bot_module, "expire_unpaid_bookings", lambda bot: ok("expire"))
+    monkeypatch.setattr(bot_module, "auto_close_old_visits", lambda bot: ok("auto"))
     monkeypatch.setattr(bot_module, "send_review_requests", lambda bot: ok("review"))
 
     async def one_round():
@@ -225,4 +226,4 @@ def test_maintenance_loop_runs_all_jobs(bot_env, monkeypatch):
             pass
 
     asyncio.run(one_round())
-    assert ran == ["boom", "expire", "review"]
+    assert ran == ["boom", "expire", "auto", "review"]

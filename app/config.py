@@ -54,6 +54,8 @@ class Settings:
     reminder_before_min: int = field(default_factory=lambda: _int("REMINDER_BEFORE_MIN", 120))
     # Клиент может сам перенести запись не позднее чем за столько минут до визита
     reschedule_before_min: int = field(default_factory=lambda: _int("RESCHEDULE_BEFORE_MIN", 60))
+    # через сколько часов после конца визита неотмеченная запись сама станет «состоялась» (0 — выключено)
+    auto_done_after_hours: int = field(default_factory=lambda: _int("AUTO_DONE_AFTER_HOURS", 24))
 
     # Хранилище и время
     database_url: str = field(default_factory=lambda: _text("DATABASE_URL", "sqlite:///./booking.db"))

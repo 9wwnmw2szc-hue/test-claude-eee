@@ -265,3 +265,30 @@ def test_stats_on_empty_database(session):
     assert result["done"] == 0 and result["revenue"] == 0 and result["avg_check"] == 0
     assert result["attendance"] is None and result["avg_rating"] is None
     assert result["by_service"] == result["by_master"] == result["top_clients"] == []
+
+
+# ---------- автоотметка забытых визитов ----------
+
+
+def test_auto_close_marks_only_old_unmarked_visits(session, data):
+    old = book(session, data, 1, datetime(2026, 10, 14, 11, 0))  # закончился больше суток назад
+    recent = book(session, data, 2, datetime(2026, 10, 15, 11, 0))  # закончился меньше суток назад
+    future = book(session, data, 3, datetime(2026, 10, 19, 11, 0))
+    manual = book(session, data, 4, datetime(2026, 10, 14, 12, 0))
+    booking.mark_no_show(session, manual.id, datetime(2026, 10, 14, 13, 0))
+
+    closed = booking.auto_close_visits(session, datetime(2026, 10, 16, 8, 0), 24)
+    assert [b.id for b in closed] == [old.id]
+    assert (old.status, recent.status, future.status, manual.status) == (DONE, ACTIVE, ACTIVE, NO_SHOW)
+
+
+def test_auto_close_disabled_and_pending_untouched(session, data):
+    service, master = data
+    client = booking.get_or_create_client(session, 9, "Иван")
+    pending = booking.create_booking(
+        session, client, master.id, service.id, datetime(2026, 10, 12, 11, 0), CREATED, prepay_amount=450
+    )
+    old = book(session, data, 1, datetime(2026, 10, 13, 11, 0))
+    assert booking.auto_close_visits(session, NOW, 0) == []
+    booking.auto_close_visits(session, NOW, 24)
+    assert (old.status, pending.status) == (DONE, PENDING)

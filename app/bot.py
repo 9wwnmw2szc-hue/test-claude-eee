@@ -715,12 +715,23 @@ async def send_review_requests(bot: Bot) -> int:
     return sent
 
 
+async def auto_close_old_visits(bot: Bot) -> int:
+    """Закрывает забытые администратором визиты как «состоялась»."""
+    with db.session_scope() as session:
+        closed = booking.auto_close_visits(session, db.now_local(), settings.auto_done_after_hours)
+        count = len(closed)
+    if count:
+        log.info("Автоотметка: %s визитов помечено как состоявшиеся", count)
+    return count
+
+
 async def reminder_loop(bot: Bot, interval: int = 60) -> None:
     """Раз в минуту: напоминания о визитах, снятие неоплаченных броней, просьбы об оценке."""
     while True:
         for job, what in (
             (send_due_reminders, "напоминаний"),
             (expire_unpaid_bookings, "снятия неоплаченных броней"),
+            (auto_close_old_visits, "автоотметки визитов"),
             (send_review_requests, "запросов оценки"),
         ):
             try:
