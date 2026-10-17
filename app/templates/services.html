@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Услуги</h1>
+<div class="card">
+{% if services %}
+<table>
+  <tr><th>Название</th><th>Длительность</th><th>Цена</th><th></th></tr>
+  {% for s in services %}
+  <tr class="{{ '' if s.active else 'off' }}">
+    <td>{{ s.name }} {% if not s.active %}<span class="tag">скрыта</span>{% endif %}</td>
+    <td>{{ s.duration_min }} мин</td>
+    <td>{{ s.price }} ₽</td>
+    <td>
+      <form class="inline" method="post" action="/services/{{ s.id }}/toggle">
+        <button class="ghost">{{ 'Скрыть' if s.active else 'Показать' }}</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="muted">Услуг пока нет. Добавьте первую ниже.</p>
+{% endif %}
+</div>
+<div class="card">
+  <form class="row" method="post" action="/services">
+    <label>Название <input name="name" required maxlength="120"></label>
+    <label>Минут <input name="duration_min" type="number" min="5" max="720" step="5" value="60" required></label>
+    <label>Цена, ₽ <input name="price" type="number" min="0" value="0" required></label>
+    <button>Добавить услугу</button>
+  </form>
+</div>
+{% endblock %}

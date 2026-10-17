@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Предстоящие записи</h1>
+<div class="card">
+{% if bookings %}
+<table>
+  <tr><th>Когда</th><th>Клиент</th><th>Услуга</th><th>Мастер</th><th>Цена</th><th></th></tr>
+  {% for b in bookings %}
+  <tr>
+    <td>{{ b.start_at.strftime('%d.%m') }} {{ weekdays[b.start_at.weekday()] }}, <b>{{ b.start_at.strftime('%H:%M') }}</b></td>
+    <td>
+      {{ b.client.name or '—' }}
+      {% if b.client.username %}<a class="muted" href="https://t.me/{{ b.client.username }}">@{{ b.client.username }}</a>{% endif %}
+    </td>
+    <td>{{ b.service.name }}</td>
+    <td>{{ b.master.name }}</td>
+    <td>{{ b.service.price }} ₽</td>
+    <td>
+      <form class="inline" method="post" action="/bookings/{{ b.id }}/cancel" onsubmit="return confirm('Отменить запись?')">
+        <button class="danger">Отменить</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="muted">Предстоящих записей нет.</p>
+{% endif %}
+</div>
+{% endblock %}

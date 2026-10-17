@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Клиенты</h1>
+<div class="card">
+{% if rows %}
+<table>
+  <tr><th>Имя</th><th>Telegram</th><th>Всего записей</th><th>С нами с</th></tr>
+  {% for client, total in rows %}
+  <tr>
+    <td>{{ client.name or '—' }}</td>
+    <td>{% if client.username %}<a href="https://t.me/{{ client.username }}">@{{ client.username }}</a>{% else %}<span class="muted">id {{ client.tg_id }}</span>{% endif %}</td>
+    <td>{{ total }}</td>
+    <td class="muted">{{ client.created_at.strftime('%d.%m.%Y') }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="muted">Клиентов пока нет — они появятся после первой записи через бота.</p>
+{% endif %}
+</div>
+{% endblock %}

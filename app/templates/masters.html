@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Мастера и график</h1>
+{% for m in masters %}
+<div class="card {{ '' if m.active else 'off' }}">
+  <div style="display:flex; justify-content:space-between; align-items:center; gap:8px">
+    <b>{{ m.name }} {% if not m.active %}<span class="tag">отключён</span>{% endif %}</b>
+    <form class="inline" method="post" action="/masters/{{ m.id }}/toggle">
+      <button class="ghost">{{ 'Отключить' if m.active else 'Включить' }}</button>
+    </form>
+  </div>
+  <div class="hours">
+    {% for h in m.hours %}
+    <form method="post" action="/hours/{{ h.id }}/delete">
+      {{ weekdays[h.weekday] }} {{ h.start.strftime('%H:%M') }}–{{ h.end.strftime('%H:%M') }}
+      <button class="ghost" title="Удалить">×</button>
+    </form>
+    {% else %}
+    <span class="muted">График не задан — записаться к мастеру нельзя.</span>
+    {% endfor %}
+  </div>
+  <form class="row" method="post" action="/masters/{{ m.id }}/hours">
+    <label>День
+      <select name="weekday">
+        {% for d in weekdays %}<option value="{{ loop.index0 }}">{{ d }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>С <input name="start" type="time" value="10:00" required></label>
+    <label>До <input name="end" type="time" value="19:00" required></label>
+    <button>Добавить окно</button>
+  </form>
+</div>
+{% else %}
+<div class="card"><p class="muted">Мастеров пока нет. Добавьте первого ниже.</p></div>
+{% endfor %}
+<div class="card">
+  <form class="row" method="post" action="/masters">
+    <label>Имя мастера <input name="name" required maxlength="120"></label>
+    <button>Добавить мастера</button>
+  </form>
+</div>
+{% endblock %}
