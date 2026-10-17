@@ -11,7 +11,7 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from app.models import PENDING, WEEKDAYS, Booking, Master, Service
+from app.models import ACTIVE, PENDING, WEEKDAYS, Booking, Master, Service
 
 TS = "%Y%m%d%H%M"
 DS = "%Y%m%d"
@@ -95,10 +95,49 @@ def my_bookings_kb(bookings: list[Booking]) -> InlineKeyboardMarkup:
         when = f"{bk.start_at:%d.%m %H:%M}"
         if bk.status == PENDING:
             b.button(text=f"💳 Оплатить {when}", callback_data=f"pay:{bk.id}")
+        if bk.status == ACTIVE:
+            b.button(text=f"🔄 Перенести {when}", callback_data=f"rs:{bk.id}")
         b.button(text=f"❌ Отменить {when}", callback_data=f"x:{bk.id}")
     b.button(text="📅 Записаться ещё", callback_data="book")
     b.button(text="⬅️ В меню", callback_data="menu")
     b.adjust(1)
+    return b.as_markup()
+
+
+def reschedule_days_kb(booking_id: int, days: list[date]) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    for d in days:
+        b.button(
+            text=f"{WEEKDAYS[d.weekday()]} {d:%d.%m}",
+            callback_data=f"rd:{booking_id}:{d:{DS}}",
+        )
+    b.adjust(3)
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="my"))
+    return b.as_markup()
+
+
+def reschedule_times_kb(booking_id: int, slots: list[datetime]) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    for t in slots:
+        b.button(text=f"{t:%H:%M}", callback_data=f"rt:{booking_id}:{t:{TS}}")
+    b.adjust(4)
+    b.row(InlineKeyboardButton(text="⬅️ Другой день", callback_data=f"rs:{booking_id}"))
+    return b.as_markup()
+
+
+def reschedule_confirm_kb(booking_id: int, start: datetime) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Перенести", callback_data=f"rok:{booking_id}:{start:{TS}}")
+    b.button(text="⬅️ Другое время", callback_data=f"rd:{booking_id}:{start:{DS}}")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def rating_kb(booking_id: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    for n in range(1, 6):
+        b.button(text=f"{n}⭐", callback_data=f"rate:{booking_id}:{n}")
+    b.adjust(5)
     return b.as_markup()
 
 

@@ -3,24 +3,35 @@
 import logging
 import secrets
 from contextlib import asynccontextmanager
-from datetime import time
+from datetime import time, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 
-from app import booking, db
+from app import booking, db, stats
 from app.booking import BookingError
 from app.config import settings
-from app.models import PENDING, WEEKDAYS, Booking, Client, Master, Service, WorkingHours
+from app.models import (
+    DONE,
+    NO_SHOW,
+    PENDING,
+    WEEKDAYS,
+    Booking,
+    Client,
+    Master,
+    Service,
+    WorkingHours,
+)
 
 log = logging.getLogger("booking-admin")
 BASE = Path(__file__).parent
 templates = Jinja2Templates(directory=BASE / "templates")
+templates.env.filters["rub"] = lambda n: f"{int(n):,}".replace(",", " ") + " ₽"
 security = HTTPBasic()
 
 
@@ -75,7 +86,14 @@ def render(request: Request, name: str, **ctx):
     return templates.TemplateResponse(
         request,
         name,
-        {"business": settings.business_name, "weekdays": WEEKDAYS, "PENDING": PENDING, **ctx},
+        {
+            "business": settings.business_name,
+            "weekdays": WEEKDAYS,
+            "PENDING": PENDING,
+            "DONE": DONE,
+            "NO_SHOW": NO_SHOW,
+            **ctx,
+        },
     )
 
 
@@ -101,6 +119,49 @@ def cancel(booking_id: int):
         except BookingError:
             pass
     return back("/")
+
+
+# ---------- итоги визитов и статистика ----------
+
+
+@app.get("/past", dependencies=AUTH)
+def past_page(request: Request):
+    with db.session_scope() as s:
+        now = db.now_local()
+        return render(
+            request,
+            "past.html",
+            to_close=booking.bookings_to_close(s, now),
+            closed=booking.recently_closed(s, now),
+        )
+
+
+@app.post("/bookings/{booking_id}/done", dependencies=POST_GUARD)
+def visit_done(booking_id: int):
+    with db.session_scope() as s:
+        try:
+            booking.mark_done(s, booking_id, db.now_local())
+        except BookingError:
+            pass
+    return back("/past")
+
+
+@app.post("/bookings/{booking_id}/no-show", dependencies=POST_GUARD)
+def visit_no_show(booking_id: int):
+    with db.session_scope() as s:
+        try:
+            booking.mark_no_show(s, booking_id, db.now_local())
+        except BookingError:
+            pass
+    return back("/past")
+
+
+@app.get("/stats", dependencies=AUTH)
+def stats_page(request: Request, days: int = Query(30, ge=1, le=730)):
+    now = db.now_local()
+    with db.session_scope() as s:
+        data = stats.period_stats(s, now - timedelta(days=days), now, now)
+    return render(request, "stats.html", days=days, s=data)
 
 
 # ---------- клиенты ----------

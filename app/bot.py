@@ -23,7 +23,7 @@ from sqlalchemy.orm import joinedload
 from app import booking, db, keyboards as kb
 from app.booking import BookingError
 from app.config import settings
-from app.models import PENDING, Booking, Master, Service
+from app.models import ACTIVE, PENDING, Booking, Master, Service
 
 log = logging.getLogger("booking-bot")
 router = Router()
@@ -67,14 +67,17 @@ def booking_id_from_payload(payload: str) -> int | None:
     return None
 
 
-async def show(cb: CallbackQuery, text: str, markup) -> None:
-    """Редактируем текущее сообщение; если текст не изменился — игнорируем ошибку."""
+async def show(cb: CallbackQuery, text: str, markup, answer: bool = True) -> None:
+    """Редактируем текущее сообщение; если текст не изменился — игнорируем ошибку.
+
+    answer=False — не отвечать на callback (его уже закрыли всплывающим уведомлением)."""
     try:
         await cb.message.edit_text(text, reply_markup=markup)
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
             raise
-    await cb.answer()
+    if answer:
+        await cb.answer()
 
 
 async def notify_admins(bot: Bot, text: str) -> None:
@@ -489,6 +492,171 @@ async def cb_cancel(cb: CallbackQuery, bot: Bot) -> None:
     await show(cb, text, markup)
 
 
+# ---------- перенос записи ----------
+
+
+def _own_active_booking(s, booking_id: int, tg_id: int) -> Booking | None:
+    b = s.get(
+        Booking,
+        booking_id,
+        options=[
+            joinedload(Booking.client),
+            joinedload(Booking.service),
+            joinedload(Booking.master),
+        ],
+    )
+    if b is None or b.client.tg_id != tg_id or b.status != ACTIVE:
+        return None
+    return b
+
+
+async def _show_reschedule_days(cb: CallbackQuery, booking_id: int, answer: bool = True) -> None:
+    now = db.now_local()
+    with db.session_scope() as s:
+        b = _own_active_booking(s, booking_id, cb.from_user.id)
+        if b is not None:
+            header = esc(booking.format_booking(b))
+            too_late = b.start_at - now < timedelta(minutes=settings.reschedule_before_min)
+            days = (
+                []
+                if too_late
+                else booking.available_days(
+                    s, b.master_id, b.service_id, now, exclude_booking_id=b.id
+                )
+            )
+    if b is None:
+        await cb.answer("Эту запись уже нельзя перенести.", show_alert=True)
+        return
+    if too_late:
+        await cb.answer(
+            f"Перенос возможен не позднее чем за {settings.reschedule_before_min} мин до визита. "
+            "Свяжитесь с администратором.",
+            show_alert=True,
+        )
+        return
+    if not days:
+        await show(
+            cb,
+            f"Для переноса пока нет свободных дат.\n\n{header}",
+            kb.main_menu_kb(),
+            answer=answer,
+        )
+        return
+    await show(
+        cb,
+        f"Перенос записи:\n\n{header}\n\nВыберите новую дату:",
+        kb.reschedule_days_kb(booking_id, days),
+        answer=answer,
+    )
+
+
+@router.callback_query(F.data.startswith("rs:"))
+async def cb_reschedule(cb: CallbackQuery) -> None:
+    await _show_reschedule_days(cb, int(cb.data.split(":")[1]))
+
+
+@router.callback_query(F.data.startswith("rd:"))
+async def cb_reschedule_day(cb: CallbackQuery) -> None:
+    _, booking_id, day = cb.data.split(":")
+    booking_id = int(booking_id)
+    with db.session_scope() as s:
+        b = _own_active_booking(s, booking_id, cb.from_user.id)
+        slots = (
+            booking.get_free_slots(
+                s, b.master_id, b.service_id, kb.parse_ds(day), db.now_local(),
+                exclude_booking_id=b.id,
+            )
+            if b is not None
+            else []
+        )
+    if b is None:
+        await cb.answer("Эту запись уже нельзя перенести.", show_alert=True)
+        return
+    if not slots:
+        await cb.answer("На эту дату свободного времени уже нет.", show_alert=True)
+        await _show_reschedule_days(cb, booking_id, answer=False)
+        return
+    await show(
+        cb,
+        f"Выберите новое время на <b>{kb.parse_ds(day):%d.%m.%Y}</b>:",
+        kb.reschedule_times_kb(booking_id, slots),
+    )
+
+
+@router.callback_query(F.data.startswith("rt:"))
+async def cb_reschedule_time(cb: CallbackQuery) -> None:
+    _, booking_id, ts = cb.data.split(":")
+    booking_id, start = int(booking_id), kb.parse_ts(ts)
+    with db.session_scope() as s:
+        b = _own_active_booking(s, booking_id, cb.from_user.id)
+        header = esc(booking.format_booking(b)) if b is not None else ""
+    if b is None:
+        await cb.answer("Эту запись уже нельзя перенести.", show_alert=True)
+        return
+    await show(
+        cb,
+        f"Перенести запись:\n\n{header}\n\nна <b>{start:%d.%m.%Y}</b> в <b>{start:%H:%M}</b>?",
+        kb.reschedule_confirm_kb(booking_id, start),
+    )
+
+
+@router.callback_query(F.data.startswith("rok:"))
+async def cb_reschedule_confirm(cb: CallbackQuery, bot: Bot) -> None:
+    _, booking_id, ts = cb.data.split(":")
+    booking_id, start = int(booking_id), kb.parse_ts(ts)
+    user = cb.from_user
+    try:
+        with db.session_scope() as s:
+            b, old_start = booking.reschedule_booking(
+                s,
+                booking_id,
+                start,
+                db.now_local(),
+                tg_id=user.id,
+                min_before_min=settings.reschedule_before_min,
+            )
+            summary = booking.format_booking(b)
+            admin_text = (
+                f"🔄 Перенос записи #{b.id}\n"
+                f"было: {old_start:%d.%m.%Y %H:%M}\nстало: {start:%d.%m.%Y %H:%M}\n"
+                f"{esc(b.service.name)} — {esc(b.master.name)}\n"
+                + client_line(user.full_name, user.username or "", b.client.phone)
+            )
+    except BookingError as e:
+        await cb.answer(str(e), show_alert=True)
+        await _show_reschedule_days(cb, booking_id, answer=False)
+        return
+    await show(
+        cb,
+        f"✅ Запись перенесена:\n\n{esc(summary)}\n\nНапоминание придёт ближе к новому времени.",
+        kb.main_menu_kb(),
+    )
+    await notify_admins(bot, admin_text)
+
+
+# ---------- оценка визита ----------
+
+
+@router.callback_query(F.data.startswith("rate:"))
+async def cb_rate(cb: CallbackQuery, bot: Bot) -> None:
+    _, booking_id, value = cb.data.split(":")
+    user = cb.from_user
+    try:
+        with db.session_scope() as s:
+            b = booking.set_rating(s, int(booking_id), user.id, int(value))
+            rating = b.rating
+            admin_text = (
+                f"⚠️ Низкая оценка {rating}/5 по записи #{b.id}\n{esc(booking.format_booking(b))}\n"
+                + client_line(user.full_name, user.username or "", b.client.phone)
+            )
+    except BookingError as e:
+        await cb.answer(str(e), show_alert=True)
+        return
+    await show(cb, "Спасибо за оценку! Будем рады видеть вас снова 💛", kb.main_menu_kb())
+    if rating <= 3:
+        await notify_admins(bot, admin_text)
+
+
 # ---------- фоновые задачи ----------
 
 
@@ -528,17 +696,37 @@ async def expire_unpaid_bookings(bot: Bot) -> int:
     return len(notes)
 
 
+async def send_review_requests(bot: Bot) -> int:
+    """После отметки «визит состоялся» просит клиента оценить визит. Возвращает число отправленных."""
+    sent = 0
+    with db.session_scope() as s:
+        for b in booking.due_review_requests(s, db.now_local()):
+            try:
+                await bot.send_message(
+                    b.client.tg_id,
+                    f"Спасибо, что были у нас!\n\n{esc(booking.format_booking(b))}\n\n"
+                    "Как всё прошло? Оцените визит:",
+                    reply_markup=kb.rating_kb(b.id),
+                )
+                sent += 1
+            except TelegramAPIError as e:
+                log.warning("Просьба об оценке для %s не доставлена: %s", b.client.tg_id, e)
+            b.review_sent = True  # одну просьбу на визит, даже если клиент заблокировал бота
+    return sent
+
+
 async def reminder_loop(bot: Bot, interval: int = 60) -> None:
-    """Раз в минуту: напоминания о визитах и снятие неоплаченных броней."""
+    """Раз в минуту: напоминания о визитах, снятие неоплаченных броней, просьбы об оценке."""
     while True:
-        try:
-            await send_due_reminders(bot)
-        except Exception:
-            log.exception("Ошибка в цикле напоминаний")
-        try:
-            await expire_unpaid_bookings(bot)
-        except Exception:
-            log.exception("Ошибка при снятии неоплаченных броней")
+        for job, what in (
+            (send_due_reminders, "напоминаний"),
+            (expire_unpaid_bookings, "снятия неоплаченных броней"),
+            (send_review_requests, "запросов оценки"),
+        ):
+            try:
+                await job(bot)
+            except Exception:
+                log.exception("Ошибка в цикле %s", what)
         await asyncio.sleep(interval)
 
 

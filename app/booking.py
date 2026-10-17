@@ -12,6 +12,9 @@ from app.models import (
     ACTIVE,
     BLOCKING,
     CANCELLED,
+    DONE,
+    NO_SHOW,
+    OCCUPYING,
     PENDING,
     Booking,
     Client,
@@ -85,13 +88,21 @@ def masters_for_service(session: Session, service_id: int) -> list[Master]:
 # ---------- слоты ----------
 
 
-def _overlaps(session: Session, master_id: int, start: datetime, end: datetime) -> bool:
+def _overlaps(
+    session: Session,
+    master_id: int,
+    start: datetime,
+    end: datetime,
+    exclude_booking_id: int | None = None,
+) -> bool:
     stmt = select(Booking.id).where(
         Booking.master_id == master_id,
-        Booking.status.in_(BLOCKING),
+        Booking.status.in_(OCCUPYING),
         Booking.start_at < end,
         Booking.end_at > start,
     )
+    if exclude_booking_id is not None:
+        stmt = stmt.where(Booking.id != exclude_booking_id)
     return session.scalar(stmt) is not None
 
 
@@ -103,8 +114,12 @@ def get_free_slots(
     now: datetime,
     step_min: int | None = None,
     min_lead_min: int | None = None,
+    exclude_booking_id: int | None = None,
 ) -> list[datetime]:
-    """Свободные времена начала для услуги у мастера в указанный день."""
+    """Свободные времена начала для услуги у мастера в указанный день.
+
+    exclude_booking_id — не считать занятым время этой записи (нужно при её переносе,
+    иначе нельзя сдвинуть визит на соседнее время)."""
     step = timedelta(minutes=step_min or settings.slot_step_min)
     lead = timedelta(
         minutes=settings.min_lead_min if min_lead_min is None else min_lead_min
@@ -124,14 +139,15 @@ def get_free_slots(
         )
     ).all()
 
-    busy = session.execute(
-        select(Booking.start_at, Booking.end_at).where(
-            Booking.master_id == master_id,
-            Booking.status.in_(BLOCKING),
-            Booking.start_at < datetime.combine(day, datetime.max.time()),
-            Booking.end_at > datetime.combine(day, datetime.min.time()),
-        )
-    ).all()
+    busy_stmt = select(Booking.start_at, Booking.end_at).where(
+        Booking.master_id == master_id,
+        Booking.status.in_(OCCUPYING),
+        Booking.start_at < datetime.combine(day, datetime.max.time()),
+        Booking.end_at > datetime.combine(day, datetime.min.time()),
+    )
+    if exclude_booking_id is not None:
+        busy_stmt = busy_stmt.where(Booking.id != exclude_booking_id)
+    busy = session.execute(busy_stmt).all()
 
     slots: list[datetime] = []
     for w in windows:
@@ -148,13 +164,19 @@ def get_free_slots(
 
 
 def available_days(
-    session: Session, master_id: int, service_id: int, now: datetime
+    session: Session,
+    master_id: int,
+    service_id: int,
+    now: datetime,
+    exclude_booking_id: int | None = None,
 ) -> list[date]:
     """Даты в горизонте записи, где у мастера есть хотя бы один свободный слот."""
     days = []
     for i in range(settings.booking_days_ahead + 1):
         d = now.date() + timedelta(days=i)
-        if get_free_slots(session, master_id, service_id, d, now):
+        if get_free_slots(
+            session, master_id, service_id, d, now, exclude_booking_id=exclude_booking_id
+        ):
             days.append(d)
     return days
 
@@ -199,6 +221,7 @@ def create_booking(
         end_at=end_at,
         status=PENDING if prepay_amount > 0 else ACTIVE,
         prepay_amount=max(prepay_amount, 0),
+        price=service.price,
         created_at=now,
     )
     session.add(booking)
@@ -222,6 +245,168 @@ def cancel_booking(
     booking.status = CANCELLED
     session.flush()
     return booking
+
+
+def reschedule_booking(
+    session: Session,
+    booking_id: int,
+    new_start: datetime,
+    now: datetime,
+    tg_id: int | None = None,
+    min_before_min: int = 0,
+) -> tuple[Booking, datetime]:
+    """Переносит подтверждённую запись на другое время у того же мастера.
+
+    Возвращает (запись, прежнее время начала). Если передан tg_id, переносить можно только свою
+    запись. Перенос возможен не позднее чем за min_before_min минут до визита."""
+    booking = session.get(
+        Booking,
+        booking_id,
+        options=[
+            joinedload(Booking.client),
+            joinedload(Booking.service),
+            joinedload(Booking.master),
+        ],
+    )
+    if booking is None:
+        raise BookingError("Запись не найдена.")
+    if tg_id is not None and booking.client.tg_id != tg_id:
+        raise BookingError("Это не ваша запись.")
+    if booking.status != ACTIVE:
+        raise BookingError("Перенести можно только подтверждённую запись.")
+    if booking.start_at - now < timedelta(minutes=min_before_min):
+        raise BookingError(
+            f"Перенос возможен не позднее чем за {min_before_min} мин до визита. "
+            "Свяжитесь с администратором."
+        )
+    free = get_free_slots(
+        session,
+        booking.master_id,
+        booking.service_id,
+        new_start.date(),
+        now,
+        exclude_booking_id=booking.id,
+    )
+    if new_start not in free:
+        raise BookingError("К сожалению, это время уже занято. Выберите другое.")
+    old_start = booking.start_at
+    booking.start_at = new_start
+    booking.end_at = new_start + timedelta(minutes=booking.service.duration_min)
+    booking.reminder_sent = False  # напоминание должно прийти уже про новое время
+    session.flush()
+    return booking, old_start
+
+
+# ---------- итог визита и оценка ----------
+
+
+def _close_visit(session: Session, booking_id: int, now: datetime, status: str) -> Booking:
+    booking = session.get(
+        Booking,
+        booking_id,
+        options=[
+            joinedload(Booking.client),
+            joinedload(Booking.service),
+            joinedload(Booking.master),
+        ],
+    )
+    if booking is None:
+        raise BookingError("Запись не найдена.")
+    if booking.status != ACTIVE:
+        raise BookingError("Отметить можно только подтверждённую запись.")
+    if booking.start_at > now:
+        raise BookingError("Визит ещё не начался.")
+    booking.status = status
+    session.flush()
+    return booking
+
+
+def mark_done(session: Session, booking_id: int, now: datetime) -> Booking:
+    """Визит состоялся: идёт в выручку, клиенту уйдёт просьба оценить визит."""
+    return _close_visit(session, booking_id, now, DONE)
+
+
+def mark_no_show(session: Session, booking_id: int, now: datetime) -> Booking:
+    """Клиент не пришёл: время освобождено, в выручку не входит."""
+    return _close_visit(session, booking_id, now, NO_SHOW)
+
+
+def due_review_requests(
+    session: Session, now: datetime, within_days: int = 3
+) -> list[Booking]:
+    """Состоявшиеся визиты, по которым ещё не просили оценку (не старше within_days дней)."""
+    stmt = (
+        select(Booking)
+        .where(
+            Booking.status == DONE,
+            Booking.review_sent.is_(False),
+            Booking.rating == 0,
+            Booking.end_at >= now - timedelta(days=within_days),
+        )
+        .options(
+            joinedload(Booking.client),
+            joinedload(Booking.service),
+            joinedload(Booking.master),
+        )
+    )
+    return list(session.scalars(stmt).unique())
+
+
+def set_rating(session: Session, booking_id: int, tg_id: int, rating: int) -> Booking:
+    if not 1 <= rating <= 5:
+        raise BookingError("Оценка должна быть от 1 до 5.")
+    booking = session.get(
+        Booking,
+        booking_id,
+        options=[
+            joinedload(Booking.client),
+            joinedload(Booking.service),
+            joinedload(Booking.master),
+        ],
+    )
+    if booking is None or booking.client.tg_id != tg_id or booking.status != DONE:
+        raise BookingError("Оценить можно только свой состоявшийся визит.")
+    if booking.rating:
+        raise BookingError("Спасибо, вы уже оценили этот визит.")
+    booking.rating = rating
+    session.flush()
+    return booking
+
+
+def bookings_to_close(session: Session, now: datetime, limit: int = 200) -> list[Booking]:
+    """Подтверждённые записи, время которых уже наступило: администратор отмечает итог."""
+    stmt = (
+        select(Booking)
+        .where(Booking.status == ACTIVE, Booking.start_at <= now)
+        .options(
+            joinedload(Booking.client),
+            joinedload(Booking.service),
+            joinedload(Booking.master),
+        )
+        .order_by(Booking.start_at.desc())
+        .limit(limit)
+    )
+    return list(session.scalars(stmt).unique())
+
+
+def recently_closed(
+    session: Session, now: datetime, days: int = 14, limit: int = 200
+) -> list[Booking]:
+    stmt = (
+        select(Booking)
+        .where(
+            Booking.status.in_((DONE, NO_SHOW)),
+            Booking.start_at >= now - timedelta(days=days),
+        )
+        .options(
+            joinedload(Booking.client),
+            joinedload(Booking.service),
+            joinedload(Booking.master),
+        )
+        .order_by(Booking.start_at.desc())
+        .limit(limit)
+    )
+    return list(session.scalars(stmt).unique())
 
 
 # ---------- предоплата ----------

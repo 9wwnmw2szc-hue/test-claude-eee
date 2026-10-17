@@ -52,6 +52,8 @@ class Settings:
     min_lead_min: int = field(default_factory=lambda: _int("MIN_LEAD_MIN", 60))
     booking_days_ahead: int = field(default_factory=lambda: _int("BOOKING_DAYS_AHEAD", 14))
     reminder_before_min: int = field(default_factory=lambda: _int("REMINDER_BEFORE_MIN", 120))
+    # Клиент может сам перенести запись не позднее чем за столько минут до визита
+    reschedule_before_min: int = field(default_factory=lambda: _int("RESCHEDULE_BEFORE_MIN", 60))
 
     # Хранилище и время
     database_url: str = field(default_factory=lambda: _text("DATABASE_URL", "sqlite:///./booking.db"))

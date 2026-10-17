@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Статистика</h1>
+<div class="period">
+  {% for d, label in ((7, '7 дней'), (30, '30 дней'), (90, '90 дней'), (365, 'Год')) %}
+  <a href="/stats?days={{ d }}" class="{{ 'on' if days == d }}">{{ label }}</a>
+  {% endfor %}
+</div>
+
+<div class="kpis">
+  <div class="kpi"><b>{{ s.revenue|rub }}</b><span>выручка (состоявшиеся визиты)</span></div>
+  <div class="kpi"><b>{{ s.done }}</b><span>визитов состоялось</span></div>
+  <div class="kpi"><b>{{ s.avg_check|rub }}</b><span>средний чек</span></div>
+  <div class="kpi"><b>{% if s.attendance is not none %}{{ s.attendance }}%{% else %}—{% endif %}</b><span>явка (пришли из отмеченных)</span></div>
+  <div class="kpi"><b>{% if s.avg_rating is not none %}{{ s.avg_rating }} ⭐{% else %}—{% endif %}</b><span>средняя оценка{% if s.rated_count %} ({{ s.rated_count }}){% endif %}</span></div>
+  <div class="kpi"><b>{{ s.no_show }}</b><span>не пришли</span></div>
+  <div class="kpi"><b>{{ s.cancelled }}</b><span>отменено</span></div>
+  <div class="kpi"><b>{{ s.upcoming }}</b><span>впереди записей</span></div>
+</div>
+
+{% macro breakdown(title, rows, empty) %}
+<div class="card">
+  <h2>{{ title }}</h2>
+  {% if rows %}
+  <table>
+    <tr><th>Название</th><th class="num">Визитов</th><th class="num">Выручка</th></tr>
+    {% for r in rows %}
+    <tr><td>{{ r.name }}</td><td class="num">{{ r.visits }}</td><td class="num">{{ r.revenue|rub }}</td></tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">{{ empty }}</p>
+  {% endif %}
+</div>
+{% endmacro %}
+
+{{ breakdown('По услугам', s.by_service, 'За период нет состоявшихся визитов.') }}
+{{ breakdown('По мастерам', s.by_master, 'За период нет состоявшихся визитов.') }}
+{{ breakdown('Лучшие клиенты', s.top_clients, 'За период нет состоявшихся визитов.') }}
+
+<p class="muted">Считаются визиты, отмеченные как «состоялась» на странице «Прошедшие». Цена — на момент записи.</p>
+{% endblock %}

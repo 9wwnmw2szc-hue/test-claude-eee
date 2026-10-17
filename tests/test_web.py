@@ -10,7 +10,17 @@ from sqlalchemy.orm import sessionmaker
 
 from app import booking, db
 from app import web as web_module
-from app.models import ACTIVE, CANCELLED, PENDING, Booking, Master, Service, WorkingHours
+from app.models import (
+    ACTIVE,
+    CANCELLED,
+    DONE,
+    NO_SHOW,
+    PENDING,
+    Booking,
+    Master,
+    Service,
+    WorkingHours,
+)
 
 NOW = datetime(2026, 10, 19, 8, 0)  # понедельник
 AUTH = ("admin", "s3cret-pass")
@@ -192,3 +202,87 @@ def test_pending_booking_can_be_cancelled_from_panel(client, made_booking, sessi
     client.post(f"/bookings/{made_booking.id}/cancel", auth=AUTH, headers=SAME_ORIGIN)
     session.expire_all()
     assert session.get(Booking, made_booking.id).status == CANCELLED
+
+
+# ---------- итоги визитов и статистика ----------
+
+AFTER_VISIT = datetime(2026, 10, 19, 13, 30)  # визиты в 11:00 и 13:00 уже начались
+
+
+def test_new_pages_require_auth(client):
+    for path in ("/past", "/stats"):
+        assert client.get(path).status_code == 401, path
+    assert client.post("/bookings/1/done").status_code == 401
+
+
+def test_nav_links_to_new_pages(client):
+    page = client.get("/", auth=AUTH).text
+    assert 'href="/past"' in page and 'href="/stats"' in page
+
+
+def test_past_page_shows_visits_waiting_for_outcome(client, made_booking, monkeypatch):
+    assert "Все прошедшие визиты отмечены" in client.get("/past", auth=AUTH).text  # визит ещё впереди
+
+    monkeypatch.setattr(db, "now_local", lambda: AFTER_VISIT)
+    page = client.get("/past", auth=AUTH).text
+    assert "Состоялась" in page and "Не пришёл" in page
+    assert "<script>alert(1)</script>" not in page and "&lt;script&gt;" in page
+
+
+def test_mark_visit_done_and_no_show(client, made_booking, data, session, monkeypatch):
+    service, master = data
+    second = booking.create_booking(
+        session,
+        booking.get_or_create_client(session, 222, "Пётр"),
+        master.id,
+        service.id,
+        datetime(2026, 10, 19, 13, 0),
+        NOW,
+    )
+    session.commit()
+    monkeypatch.setattr(db, "now_local", lambda: AFTER_VISIT)
+
+    client.post(f"/bookings/{made_booking.id}/done", auth=AUTH, headers=SAME_ORIGIN)
+    client.post(f"/bookings/{second.id}/no-show", auth=AUTH, headers=SAME_ORIGIN)
+    session.expire_all()
+    assert session.get(Booking, made_booking.id).status == DONE
+    assert session.get(Booking, second.id).status == NO_SHOW
+
+    page = client.get("/past", auth=AUTH).text
+    assert "Все прошедшие визиты отмечены" in page
+    assert "состоялась" in page and "не пришёл" in page
+
+
+def test_cannot_mark_future_visit(client, made_booking, session):
+    r = client.post(
+        f"/bookings/{made_booking.id}/done", auth=AUTH, headers=SAME_ORIGIN, follow_redirects=False
+    )
+    assert r.status_code == 303  # тихо возвращаем на страницу, статус не меняется
+    session.expire_all()
+    assert session.get(Booking, made_booking.id).status == ACTIVE
+
+
+def test_visit_outcome_rejects_cross_site_post(client, made_booking, session, monkeypatch):
+    monkeypatch.setattr(db, "now_local", lambda: AFTER_VISIT)
+    r = client.post(
+        f"/bookings/{made_booking.id}/done", auth=AUTH, headers={"Origin": "https://evil.example"}
+    )
+    assert r.status_code == 403
+    session.expire_all()
+    assert session.get(Booking, made_booking.id).status == ACTIVE
+
+
+def test_stats_page_shows_revenue_and_escapes_names(client, made_booking, monkeypatch):
+    monkeypatch.setattr(db, "now_local", lambda: AFTER_VISIT)
+    client.post(f"/bookings/{made_booking.id}/done", auth=AUTH, headers=SAME_ORIGIN)
+
+    page = client.get("/stats", auth=AUTH).text
+    assert "1 500 ₽" in page and "Стрижка" in page and "Анна" in page
+    assert "<script>alert(1)</script>" not in page
+    assert client.get("/stats?days=7", auth=AUTH).status_code == 200
+
+
+def test_stats_on_empty_period_and_bad_input(client):
+    assert client.get("/stats", auth=AUTH).status_code == 200
+    assert client.get("/stats?days=0", auth=AUTH).status_code == 422
+    assert client.get("/stats?days=100000", auth=AUTH).status_code == 422

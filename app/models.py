@@ -13,7 +13,10 @@ from app.config import now_in_tz, settings
 ACTIVE = "active"  # подтверждена
 PENDING = "pending_payment"  # время удержано, ждём предоплату
 CANCELLED = "cancelled"
-BLOCKING = (ACTIVE, PENDING)  # статусы, которые занимают время мастера
+DONE = "done"  # визит состоялся (отмечает администратор)
+NO_SHOW = "no_show"  # клиент не пришёл (отмечает администратор)
+BLOCKING = (ACTIVE, PENDING)  # «открытые» записи: их можно отменить и переносить, они в «Моих записях»
+OCCUPYING = (ACTIVE, PENDING, DONE)  # статусы, которые занимают время мастера
 
 # Индекс = datetime.weekday()
 WEEKDAYS = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
@@ -101,6 +104,14 @@ class Booking(Base):
     prepay_amount: Mapped[int] = mapped_column(default=0)
     paid_amount: Mapped[int] = mapped_column(default=0)
     payment_charge_id: Mapped[str] = mapped_column(String(128), default="")
+
+    # Цена услуги на момент записи: смена прайса не меняет историю и выручку.
+    # У записей, созданных до появления поля, здесь 0 — тогда берётся текущая цена услуги.
+    price: Mapped[int] = mapped_column(default=0)
+
+    # Оценка визита клиентом (1–5, 0 — нет) и признак того, что просьбу оценить уже отправили
+    rating: Mapped[int] = mapped_column(default=0)
+    review_sent: Mapped[bool] = mapped_column(default=False)
 
     client: Mapped[Client] = relationship()
     master: Mapped[Master] = relationship()

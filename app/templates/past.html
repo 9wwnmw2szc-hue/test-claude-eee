@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Прошедшие визиты</h1>
+
+<div class="card">
+  <h2>Нужно отметить итог</h2>
+  {% if to_close %}
+  <table>
+    <tr><th>Когда</th><th>Клиент</th><th>Услуга</th><th>Мастер</th><th>Цена</th><th></th></tr>
+    {% for b in to_close %}
+    <tr>
+      <td>{{ b.start_at.strftime('%d.%m') }} {{ weekdays[b.start_at.weekday()] }}, <b>{{ b.start_at.strftime('%H:%M') }}</b></td>
+      <td>
+        {{ b.client.name or '—' }}
+        {% if b.client.phone %}<br><a href="tel:{{ b.client.phone }}">{{ b.client.phone }}</a>{% endif %}
+      </td>
+      <td>{{ b.service.name }}</td>
+      <td>{{ b.master.name }}</td>
+      <td class="num">{{ (b.price or b.service.price)|rub }}</td>
+      <td style="white-space:nowrap">
+        <form class="inline" method="post" action="/bookings/{{ b.id }}/done">
+          <button>Состоялась</button>
+        </form>
+        <form class="inline" method="post" action="/bookings/{{ b.id }}/no-show" onsubmit="return confirm('Отметить, что клиент не пришёл?')">
+          <button class="danger">Не пришёл</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="muted" style="margin:8px 0 0">«Состоялась» идёт в выручку, и клиенту уйдёт просьба оценить визит.</p>
+  {% else %}
+  <p class="muted">Все прошедшие визиты отмечены.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Закрытые за последние 14 дней</h2>
+  {% if closed %}
+  <table>
+    <tr><th>Когда</th><th>Клиент</th><th>Услуга</th><th>Мастер</th><th>Итог</th><th>Оценка</th></tr>
+    {% for b in closed %}
+    <tr>
+      <td>{{ b.start_at.strftime('%d.%m') }} {{ weekdays[b.start_at.weekday()] }}, {{ b.start_at.strftime('%H:%M') }}</td>
+      <td>{{ b.client.name or '—' }}</td>
+      <td>{{ b.service.name }}</td>
+      <td>{{ b.master.name }}</td>
+      <td>{% if b.status == DONE %}<span class="tag">состоялась · {{ (b.price or b.service.price)|rub }}</span>{% else %}<span class="tag">не пришёл</span>{% endif %}</td>
+      <td>{% if b.rating %}{{ b.rating }} ⭐{% else %}<span class="muted">—</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">Пока ничего.</p>
+  {% endif %}
+</div>
+{% endblock %}

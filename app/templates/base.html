@@ -36,6 +36,15 @@
   .hours { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 12px; }
   .hours form { display:inline-flex; align-items:center; gap:4px; border:1px solid var(--line); border-radius:7px; padding:2px 4px 2px 8px; }
   .hours button { padding:0 6px; }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:12px; margin-bottom:16px; }
+  .kpi { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  .kpi b { display:block; font-size:22px; line-height:1.3; }
+  .kpi span { color:var(--muted); font-size:13px; }
+  .period { display:flex; gap:6px; margin-bottom:12px; }
+  .period a { color:var(--muted); text-decoration:none; border:1px solid var(--line); border-radius:99px; padding:3px 12px; }
+  .period a.on { color:var(--text); border-color:var(--accent); }
+  h2 { font-size:16px; margin:0 0 8px; }
+  .num { text-align:right; white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -43,6 +52,8 @@
   <nav>
     <strong>{{ business }}</strong>
     <a href="/" class="{{ 'on' if request.url.path == '/' }}">Записи</a>
+    <a href="/past" class="{{ 'on' if request.url.path == '/past' }}">Прошедшие</a>
+    <a href="/stats" class="{{ 'on' if request.url.path == '/stats' }}">Статистика</a>
     <a href="/clients" class="{{ 'on' if request.url.path == '/clients' }}">Клиенты</a>
     <a href="/services" class="{{ 'on' if request.url.path == '/services' }}">Услуги</a>
     <a href="/masters" class="{{ 'on' if request.url.path == '/masters' }}">Мастера</a>

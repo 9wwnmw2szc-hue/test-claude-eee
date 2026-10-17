@@ -39,7 +39,10 @@ def test_init_db_upgrades_old_database_without_losing_data():
 
     columns = {t: {c["name"] for c in inspect(engine).get_columns(t)} for t in ("clients", "bookings")}
     assert "phone" in columns["clients"]
-    assert {"prepay_amount", "paid_amount", "payment_charge_id"} <= columns["bookings"]
+    new_booking_columns = {
+        "prepay_amount", "paid_amount", "payment_charge_id", "price", "rating", "review_sent",
+    }
+    assert new_booking_columns <= columns["bookings"]
     assert "master_services" in inspect(engine).get_table_names()
 
     with Session(engine) as s:
@@ -47,6 +50,7 @@ def test_init_db_upgrades_old_database_without_losing_data():
         old_booking = s.scalars(select(Booking)).one()
     assert (client.name, client.phone) == ("Иван", "")  # данные целы, у новых колонок значения по умолчанию
     assert (old_booking.status, old_booking.paid_amount, old_booking.prepay_amount) == ("active", 0, 0)
+    assert (old_booking.price, old_booking.rating, old_booking.review_sent) == (0, 0, False)
 
 
 def test_second_run_changes_nothing():
