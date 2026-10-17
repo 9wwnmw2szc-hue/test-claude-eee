@@ -13,8 +13,19 @@ from app.config import now_in_tz, settings
 from app.models import Base
 
 
+def normalize_url(url: str) -> str:
+    """Railway и Heroku отдают postgres:// или postgresql://; SQLAlchemy нужен явный драйвер psycopg."""
+    for prefix in ("postgres://", "postgresql://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg://" + url[len(prefix):]
+    return url
+
+
 def _make_engine(url: str) -> Engine:
+    url = normalize_url(url)
     kwargs: dict = {}
+    if not url.startswith("sqlite"):
+        kwargs["pool_pre_ping"] = True  # переживаем обрыв соединения после простоя
     if url.startswith("sqlite"):
         # бот и админка работают из разных потоков
         kwargs["connect_args"] = {"check_same_thread": False}
@@ -35,9 +46,11 @@ engine = _make_engine(settings.database_url)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 
-def _sql_literal(value: object) -> str:
+def _sql_literal(value: object, dialect: str = "sqlite") -> str:
     if isinstance(value, bool):
-        return "1" if value else "0"
+        if dialect == "sqlite":
+            return "1" if value else "0"
+        return "TRUE" if value else "FALSE"
     if isinstance(value, int | float):
         return str(value)
     return "'" + str(value).replace("'", "''") + "'"
@@ -73,7 +86,7 @@ def ensure_columns(bind: Engine) -> list[str]:
                     col.type.compile(dialect=bind.dialect),
                 ]
                 if col.default is not None and col.default.is_scalar:
-                    parts += ["DEFAULT", _sql_literal(col.default.arg)]
+                    parts += ["DEFAULT", _sql_literal(col.default.arg, bind.dialect.name)]
                 elif not col.nullable:
                     raise RuntimeError(
                         f"Колонку {table.name}.{col.name} нельзя добавить автоматически "

@@ -84,6 +84,17 @@ docker compose logs -f bot  # убедиться, что бот запустил
 > Образ собран по инструкции, но в этой среде Docker-демона нет, так что сборка здесь не запускалась;
 > конфигурация compose проверена командой `docker compose config`.
 
+### Запуск на Railway (PostgreSQL)
+
+1. Проект Railway → **New** → **Database** → **PostgreSQL**.
+2. Два сервиса из этого репозитория (**New** → **GitHub Repo**), оба собираются по `Dockerfile`:
+   - `bot` — команда запуска по умолчанию (`python -m app.bot`);
+   - `admin` — команда запуска `sh -c "uvicorn app.web:app --host 0.0.0.0 --port ${PORT:-8000}"`, плюс **Generate Domain** (HTTPS даёт Railway).
+3. В Variables каждого сервиса: `DATABASE_URL` = ссылка на переменную базы `${{Postgres.DATABASE_URL}}`,
+   `BUSINESS_NAME`, `ADMIN_IDS`, `TIMEZONE`; у `bot` — `BOT_TOKEN`, у `admin` — `ADMIN_PASSWORD`.
+   Токен бота вводится только в панели Railway, в репозиторий он не попадает.
+4. Таблицы и новые колонки создаются сами при первом запуске.
+
 ## Предоплата
 
 1. В [@BotFather](https://t.me/BotFather): `/mybots` → ваш бот → **Payments** → выберите платёжного
@@ -117,7 +128,7 @@ docker compose logs -f bot  # убедиться, что бот запустил
 | `ADMIN_IDS` | пусто | Telegram ID через запятую для уведомлений |
 | `ADMIN_USER` / `ADMIN_PASSWORD` | `admin` / пусто | доступ в админку; **пока пароль не задан, админка закрыта** |
 | `TIMEZONE` | `Europe/Moscow` | часовой пояс бизнеса, в нём хранятся все времена |
-| `DATABASE_URL` | `sqlite:///./booking.db` | строка подключения SQLAlchemy |
+| `DATABASE_URL` | `sqlite:///./booking.db` | строка подключения SQLAlchemy; поддерживается и PostgreSQL (`postgresql://…`, в том числе строка из Railway) |
 | `SLOT_STEP_MIN` | `30` | шаг сетки времени |
 | `MIN_LEAD_MIN` | `60` | за сколько минут до начала ещё можно записаться |
 | `BOOKING_DAYS_AHEAD` | `14` | горизонт записи в днях |
@@ -146,7 +157,7 @@ app/
   web.py         админка на FastAPI (HTTP Basic, защита POST от CSRF)
   templates/     шаблоны админки
   seed.py        демо-данные
-tests/           128 тестов, сеть не нужна
+tests/           130 тестов, сеть не нужна
 ```
 
 ## Тесты

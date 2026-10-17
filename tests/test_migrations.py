@@ -63,3 +63,14 @@ def test_fresh_database_needs_no_upgrade():
     engine = create_engine("sqlite://", poolclass=StaticPool)
     db.init_db(engine)
     assert db.ensure_columns(engine) == []
+
+
+def test_postgres_urls_get_explicit_driver():
+    assert db.normalize_url("postgres://u:p@h:5432/d") == "postgresql+psycopg://u:p@h:5432/d"
+    assert db.normalize_url("postgresql://u:p@h/d") == "postgresql+psycopg://u:p@h/d"
+    assert db.normalize_url("sqlite:///./x.db") == "sqlite:///./x.db"
+
+
+def test_boolean_defaults_are_dialect_aware():
+    assert db._sql_literal(True) == "1" and db._sql_literal(False, "sqlite") == "0"
+    assert db._sql_literal(True, "postgresql") == "TRUE" and db._sql_literal(False, "postgresql") == "FALSE"
