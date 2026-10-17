@@ -213,6 +213,7 @@ def test_maintenance_loop_runs_all_jobs(bot_env, monkeypatch):
     monkeypatch.setattr(bot_module, "send_due_reminders", lambda bot: boom(bot))
     monkeypatch.setattr(bot_module, "expire_unpaid_bookings", lambda bot: ok("expire"))
     monkeypatch.setattr(bot_module, "auto_close_old_visits", lambda bot: ok("auto"))
+    monkeypatch.setattr(bot_module, "send_winback", lambda bot: ok("winback"))
     monkeypatch.setattr(bot_module, "send_review_requests", lambda bot: ok("review"))
 
     async def one_round():
@@ -226,4 +227,4 @@ def test_maintenance_loop_runs_all_jobs(bot_env, monkeypatch):
             pass
 
     asyncio.run(one_round())
-    assert ran == ["boom", "expire", "auto", "review"]
+    assert ran == ["boom", "expire", "auto", "review", "winback"]

@@ -4,8 +4,8 @@ import math
 import re
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy import func, or_, select
+from sqlalchemy.orm import Session, aliased, joinedload, selectinload
 
 from app.config import settings
 from app.models import (
@@ -425,6 +425,50 @@ def recently_closed(
         .limit(limit)
     )
     return list(session.scalars(stmt).unique())
+
+
+# ---------- «давно не были» ----------
+
+
+def winback_candidates(
+    session: Session, now: datetime, after_days: int, limit: int = 20
+) -> list[Client]:
+    """Клиенты, чей последний состоявшийся визит был не меньше after_days дней назад.
+
+    Пропускаем тех, у кого есть открытая запись, кто отказался от напоминаний и кому уже писали
+    после последнего визита: одно напоминание на «круг» клиента, без повторов.
+    """
+    if after_days <= 0:
+        return []
+    cutoff = now - timedelta(days=after_days)
+    last_visit = func.max(Booking.end_at)
+    other = aliased(Booking)
+    open_booking = (
+        select(other.id)
+        .where(other.client_id == Client.id, other.status.in_(BLOCKING))
+        .correlate(Client)
+        .exists()
+    )
+    stmt = (
+        select(Client)
+        .join(Booking, Booking.client_id == Client.id)
+        .where(Booking.status == DONE, Client.no_promo.is_(False), ~open_booking)
+        .group_by(Client.id)
+        .having(last_visit <= cutoff)
+        .having(or_(Client.last_promo_at.is_(None), Client.last_promo_at < last_visit))
+        .order_by(last_visit)
+        .limit(limit)
+    )
+    return list(session.scalars(stmt))
+
+
+def set_promo_optout(session: Session, tg_id: int, optout: bool) -> bool:
+    """Включает/выключает напоминания. False, если клиента нет в базе."""
+    client = session.scalar(select(Client).where(Client.tg_id == tg_id))
+    if client is None:
+        return False
+    client.no_promo = optout
+    return True
 
 
 # ---------- предоплата ----------

@@ -55,6 +55,10 @@ class Settings:
     # Клиент может сам перенести запись не позднее чем за столько минут до визита
     reschedule_before_min: int = field(default_factory=lambda: _int("RESCHEDULE_BEFORE_MIN", 60))
     # через сколько часов после конца визита неотмеченная запись сама станет «состоялась» (0 — выключено)
+    # «Давно не были»: через сколько дней после последнего визита напомнить о себе (0 — выключено)
+    winback_after_days: int = field(default_factory=lambda: _int("WINBACK_AFTER_DAYS", 0))
+    # сколько клиентов обрабатывать за один проход (защита от лимитов Telegram)
+    winback_batch: int = field(default_factory=lambda: _int("WINBACK_BATCH", 20))
     auto_done_after_hours: int = field(default_factory=lambda: _int("AUTO_DONE_AFTER_HOURS", 24))
 
     # Хранилище и время

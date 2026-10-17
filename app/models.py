@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, time
 
-from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Index, String, Table, Time
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, Index, String, Table, Time
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from app.config import now_in_tz, settings
@@ -84,6 +84,9 @@ class Client(Base):
     username: Mapped[str] = mapped_column(String(64), default="")
     phone: Mapped[str] = mapped_column(String(32), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # клиент отказался от напоминаний «давно не были» (/stop) или заблокировал бота
+    no_promo: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_promo_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=None)
 
 
 class Booking(Base):

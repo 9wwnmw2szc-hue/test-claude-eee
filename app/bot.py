@@ -104,6 +104,20 @@ async def cmd_my(message: Message) -> None:
     await message.answer(text, reply_markup=markup)
 
 
+@router.message(Command("stop"))
+async def cmd_stop(message: Message) -> None:
+    with db.session_scope() as s:
+        booking.set_promo_optout(s, message.from_user.id, True)
+    await message.answer("Хорошо, напоминаний «давно не были» больше не будет. Вернуть их: /resume")
+
+
+@router.message(Command("resume"))
+async def cmd_resume(message: Message) -> None:
+    with db.session_scope() as s:
+        booking.set_promo_optout(s, message.from_user.id, False)
+    await message.answer("Готово, будем иногда напоминать о себе. Отключить: /stop")
+
+
 @router.callback_query(F.data == "menu")
 async def cb_menu(cb: CallbackQuery) -> None:
     await show(cb, greeting(), kb.main_menu_kb())
@@ -715,6 +729,31 @@ async def send_review_requests(bot: Bot) -> int:
     return sent
 
 
+async def send_winback(bot: Bot) -> int:
+    """Напоминает давним клиентам о записи. Возвращает число отправленных сообщений."""
+    sent = 0
+    with db.session_scope() as s:
+        now = db.now_local()
+        for client in booking.winback_candidates(
+            s, now, settings.winback_after_days, settings.winback_batch
+        ):
+            client.last_promo_at = now  # одно напоминание на «круг», даже если доставка не удалась
+            try:
+                await bot.send_message(
+                    client.tg_id,
+                    f"{esc(client.name or 'Здравствуйте')}, давно вас не видели в «{esc(settings.business_name)}»!\n"
+                    "Запишитесь на удобное время.\n\n"
+                    "Не хотите получать такие сообщения — /stop",
+                    reply_markup=kb.main_menu_kb(),
+                )
+                sent += 1
+            except TelegramAPIError as e:
+                client.no_promo = True  # заблокировал бота или чат недоступен: больше не пытаемся
+                log.warning("Напоминание клиенту %s не доставлено: %s", client.tg_id, e)
+            await asyncio.sleep(0.05)  # Telegram ограничивает частоту сообщений
+    return sent
+
+
 async def auto_close_old_visits(bot: Bot) -> int:
     """Закрывает забытые администратором визиты как «состоялась»."""
     with db.session_scope() as session:
@@ -733,6 +772,7 @@ async def reminder_loop(bot: Bot, interval: int = 60) -> None:
             (expire_unpaid_bookings, "снятия неоплаченных броней"),
             (auto_close_old_visits, "автоотметки визитов"),
             (send_review_requests, "запросов оценки"),
+            (send_winback, "напоминаний «давно не были»"),
         ):
             try:
                 await job(bot)
