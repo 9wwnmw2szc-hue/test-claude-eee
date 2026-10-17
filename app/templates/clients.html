@@ -4,11 +4,12 @@
 <div class="card">
 {% if rows %}
 <table>
-  <tr><th>Имя</th><th>Telegram</th><th>Всего записей</th><th>С нами с</th></tr>
+  <tr><th>Имя</th><th>Telegram</th><th>Телефон</th><th>Всего записей</th><th>С нами с</th></tr>
   {% for client, total in rows %}
   <tr>
     <td>{{ client.name or '—' }}</td>
     <td>{% if client.username %}<a href="https://t.me/{{ client.username }}">@{{ client.username }}</a>{% else %}<span class="muted">id {{ client.tg_id }}</span>{% endif %}</td>
+    <td>{% if client.phone %}<a href="tel:{{ client.phone }}">{{ client.phone }}</a>{% else %}<span class="muted">—</span>{% endif %}</td>
     <td>{{ total }}</td>
     <td class="muted">{{ client.created_at.strftime('%d.%m.%Y') }}</td>
   </tr>

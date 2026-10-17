@@ -16,7 +16,7 @@ from sqlalchemy import func, select
 from app import booking, db
 from app.booking import BookingError
 from app.config import settings
-from app.models import WEEKDAYS, Booking, Client, Master, Service, WorkingHours
+from app.models import PENDING, WEEKDAYS, Booking, Client, Master, Service, WorkingHours
 
 log = logging.getLogger("booking-admin")
 BASE = Path(__file__).parent
@@ -73,7 +73,9 @@ POST_GUARD = [Depends(require_auth), Depends(same_origin)]
 
 def render(request: Request, name: str, **ctx):
     return templates.TemplateResponse(
-        request, name, {"business": settings.business_name, "weekdays": WEEKDAYS, **ctx}
+        request,
+        name,
+        {"business": settings.business_name, "weekdays": WEEKDAYS, "PENDING": PENDING, **ctx},
     )
 
 
@@ -157,7 +159,8 @@ def masters_page(request: Request):
         items = list(s.scalars(select(Master).order_by(Master.id)))
         for m in items:
             m.hours.sort(key=lambda h: (h.weekday, h.start))
-        return render(request, "masters.html", masters=items)
+        all_services = list(s.scalars(select(Service).order_by(Service.id)))
+        return render(request, "masters.html", masters=items, services=all_services)
 
 
 @app.post("/masters", dependencies=POST_GUARD)
@@ -174,6 +177,22 @@ def toggle_master(master_id: int):
         if m is None:
             raise HTTPException(404)
         m.active = not m.active
+    return back("/masters")
+
+
+@app.post("/masters/{master_id}/services", dependencies=POST_GUARD)
+def set_master_services(master_id: int, service_ids: list[int] = Form(default=[])):
+    """Какие услуги выполняет мастер. Ничего не отмечено — значит, все."""
+    with db.session_scope() as s:
+        m = s.get(Master, master_id)
+        if m is None:
+            raise HTTPException(404)
+        chosen = (
+            list(s.scalars(select(Service).where(Service.id.in_(service_ids)).order_by(Service.id)))
+            if service_ids
+            else []
+        )
+        m.services = chosen
     return back("/masters")
 
 

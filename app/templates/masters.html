@@ -29,6 +29,18 @@
     <label>До <input name="end" type="time" value="19:00" required></label>
     <button>Добавить окно</button>
   </form>
+  {% if services %}
+  <form class="row" method="post" action="/masters/{{ m.id }}/services">
+    <span class="muted">Услуги:</span>
+    {% for s in services %}
+    <label><input type="checkbox" name="service_ids" value="{{ s.id }}" {{ 'checked' if s in m.services else '' }}> {{ s.name }}{% if not s.active %} <span class="tag">скрыта</span>{% endif %}</label>
+    {% endfor %}
+    <button class="ghost">Сохранить услуги</button>
+  </form>
+  <p class="muted" style="margin:4px 0 0">
+    {% if m.services %}Выполняет только отмеченные услуги.{% else %}Ничего не отмечено — мастер выполняет все услуги.{% endif %}
+  </p>
+  {% endif %}
 </div>
 {% else %}
 <div class="card"><p class="muted">Мастеров пока нет. Добавьте первого ниже.</p></div>

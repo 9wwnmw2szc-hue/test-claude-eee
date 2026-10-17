@@ -35,9 +35,60 @@ engine = _make_engine(settings.database_url)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 
-def init_db() -> None:
-    """Создаёт таблицы, если их ещё нет."""
-    Base.metadata.create_all(engine)
+def _sql_literal(value: object) -> str:
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, int | float):
+        return str(value)
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def ensure_columns(bind: Engine) -> list[str]:
+    """Добавляет в уже существующие таблицы колонки, появившиеся в моделях позже.
+
+    Это минимальная «миграция» для обновления кода без потери данных: только добавление
+    колонок со скалярным значением по умолчанию (или допускающих NULL). Всё остальное —
+    переименования, удаление, смена типов — требует Alembic. Возвращает список добавленных колонок.
+    """
+    from sqlalchemy import inspect
+
+    inspector = inspect(bind)
+    existing_tables = set(inspector.get_table_names())
+    preparer = bind.dialect.identifier_preparer
+    added: list[str] = []
+
+    with bind.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            if table.name not in existing_tables:
+                continue
+            have = {c["name"] for c in inspector.get_columns(table.name)}
+            for col in table.columns:
+                if col.name in have:
+                    continue
+                parts = [
+                    "ALTER TABLE",
+                    preparer.quote(table.name),
+                    "ADD COLUMN",
+                    preparer.quote(col.name),
+                    col.type.compile(dialect=bind.dialect),
+                ]
+                if col.default is not None and col.default.is_scalar:
+                    parts += ["DEFAULT", _sql_literal(col.default.arg)]
+                elif not col.nullable:
+                    raise RuntimeError(
+                        f"Колонку {table.name}.{col.name} нельзя добавить автоматически "
+                        "(NOT NULL без значения по умолчанию) — нужна ручная миграция."
+                    )
+                conn.exec_driver_sql(" ".join(parts))
+                added.append(f"{table.name}.{col.name}")
+    return added
+
+
+def init_db(bind: Engine | None = None) -> None:
+    """Создаёт недостающие таблицы и добавляет новые колонки в существующие."""
+    target = bind or engine
+    Base.metadata.create_all(target)
+    ensure_columns(target)
 
 
 @contextmanager

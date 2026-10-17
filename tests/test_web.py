@@ -10,7 +10,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app import booking, db
 from app import web as web_module
-from app.models import ACTIVE, CANCELLED, Booking, Master, Service, WorkingHours
+from app.models import ACTIVE, CANCELLED, PENDING, Booking, Master, Service, WorkingHours
 
 NOW = datetime(2026, 10, 19, 8, 0)  # понедельник
 AUTH = ("admin", "s3cret-pass")
@@ -137,3 +137,58 @@ def test_add_and_toggle_master(client, session):
     client.post(f"/masters/{m.id}/toggle", auth=AUTH, headers=SAME_ORIGIN)
     session.expire_all()
     assert session.get(Master, m.id).active is False
+
+
+def test_assign_services_to_master(client, data, session):
+    service, master = data
+    other = Service(name="Маникюр", duration_min=90, price=2000)
+    session.add(other)
+    session.commit()
+
+    page = client.get("/masters", auth=AUTH).text
+    assert "мастер выполняет все услуги" in page  # ничего не отмечено
+
+    r = client.post(
+        f"/masters/{master.id}/services", auth=AUTH, headers=SAME_ORIGIN,
+        data={"service_ids": [str(other.id)]}, follow_redirects=False,
+    )
+    assert r.status_code == 303
+    session.expire_all()
+    assert [s.name for s in session.get(Master, master.id).services] == ["Маникюр"]
+    assert "Выполняет только отмеченные услуги" in client.get("/masters", auth=AUTH).text
+
+    # пустая отправка снимает ограничение: мастер снова делает всё
+    client.post(f"/masters/{master.id}/services", auth=AUTH, headers=SAME_ORIGIN)
+    session.expire_all()
+    assert session.get(Master, master.id).services == []
+
+
+def test_unknown_master_services_404(client):
+    r = client.post("/masters/9999/services", auth=AUTH, headers=SAME_ORIGIN, data={"service_ids": ["1"]})
+    assert r.status_code == 404
+
+
+def test_phone_and_prepayment_visible_in_panel(client, made_booking, session):
+    made_booking.client.phone = "+79991234567"
+    made_booking.status = PENDING
+    made_booking.prepay_amount = 450
+    session.commit()
+
+    page = client.get("/", auth=AUTH).text
+    assert "+79991234567" in page and "ждёт предоплату 450" in page
+
+    made_booking.status = ACTIVE
+    made_booking.paid_amount = 450
+    session.commit()
+    page = client.get("/", auth=AUTH).text
+    assert "предоплата 450" in page and "верните её вручную" in page  # подсказка при отмене
+
+    assert "+79991234567" in client.get("/clients", auth=AUTH).text
+
+
+def test_pending_booking_can_be_cancelled_from_panel(client, made_booking, session):
+    made_booking.status = PENDING
+    session.commit()
+    client.post(f"/bookings/{made_booking.id}/cancel", auth=AUTH, headers=SAME_ORIGIN)
+    session.expire_all()
+    assert session.get(Booking, made_booking.id).status == CANCELLED

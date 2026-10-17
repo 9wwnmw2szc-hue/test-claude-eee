@@ -1,16 +1,31 @@
 """Бизнес-логика записи. Не зависит от Telegram и от веб-части."""
 
+import math
+import re
 from datetime import date, datetime, timedelta
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.config import settings
-from app.models import ACTIVE, CANCELLED, Booking, Client, Master, Service, WorkingHours
+from app.models import (
+    ACTIVE,
+    BLOCKING,
+    CANCELLED,
+    PENDING,
+    Booking,
+    Client,
+    Master,
+    Service,
+    WorkingHours,
+)
 
 
 class BookingError(Exception):
     """Ошибка бизнес-логики, текст можно показывать клиенту."""
+
+
+# ---------- клиенты ----------
 
 
 def get_or_create_client(
@@ -29,10 +44,51 @@ def get_or_create_client(
     return client
 
 
+def normalize_phone(raw: str) -> str:
+    """Оставляет «+» и цифры. Бросает BookingError, если на номер не похоже."""
+    digits = re.sub(r"\D", "", raw or "")
+    if not 10 <= len(digits) <= 15:
+        raise BookingError("Не удалось распознать номер телефона.")
+    if len(digits) == 11 and digits.startswith("8"):  # 8 999… → +7 999… (российский формат)
+        digits = "7" + digits[1:]
+    return "+" + digits
+
+
+def set_client_phone(
+    session: Session, tg_id: int, raw_phone: str, name: str = "", username: str = ""
+) -> Client:
+    phone = normalize_phone(raw_phone)
+    client = get_or_create_client(session, tg_id, name, username)
+    client.phone = phone
+    session.flush()
+    return client
+
+
+# ---------- мастера и услуги ----------
+
+
+def offers_service(master: Master, service_id: int) -> bool:
+    """Мастер выполняет услугу, если она отмечена у него или если не отмечено ничего (тогда — все)."""
+    return not master.services or any(s.id == service_id for s in master.services)
+
+
+def masters_for_service(session: Session, service_id: int) -> list[Master]:
+    masters = session.scalars(
+        select(Master)
+        .where(Master.active)
+        .options(selectinload(Master.services))
+        .order_by(Master.id)
+    ).all()
+    return [m for m in masters if offers_service(m, service_id)]
+
+
+# ---------- слоты ----------
+
+
 def _overlaps(session: Session, master_id: int, start: datetime, end: datetime) -> bool:
     stmt = select(Booking.id).where(
         Booking.master_id == master_id,
-        Booking.status == ACTIVE,
+        Booking.status.in_(BLOCKING),
         Booking.start_at < end,
         Booking.end_at > start,
     )
@@ -57,6 +113,8 @@ def get_free_slots(
     master = session.get(Master, master_id)
     if service is None or master is None or not service.active or not master.active:
         return []
+    if not offers_service(master, service_id):
+        return []
     duration = timedelta(minutes=service.duration_min)
 
     windows = session.scalars(
@@ -69,7 +127,7 @@ def get_free_slots(
     busy = session.execute(
         select(Booking.start_at, Booking.end_at).where(
             Booking.master_id == master_id,
-            Booking.status == ACTIVE,
+            Booking.status.in_(BLOCKING),
             Booking.start_at < datetime.combine(day, datetime.max.time()),
             Booking.end_at > datetime.combine(day, datetime.min.time()),
         )
@@ -101,6 +159,16 @@ def available_days(
     return days
 
 
+# ---------- записи ----------
+
+
+def prepayment_for(price: int, percent: int) -> int:
+    """Сумма предоплаты в рублях, округлённая вверх до рубля."""
+    if price <= 0 or percent <= 0:
+        return 0
+    return min(price, math.ceil(price * percent / 100))
+
+
 def create_booking(
     session: Session,
     client: Client,
@@ -108,11 +176,15 @@ def create_booking(
     service_id: int,
     start_at: datetime,
     now: datetime,
+    prepay_amount: int = 0,
 ) -> Booking:
+    """Создаёт запись. При prepay_amount > 0 время удерживается (PENDING) до оплаты."""
     service = session.get(Service, service_id)
     master = session.get(Master, master_id)
     if service is None or master is None:
         raise BookingError("Услуга или мастер не найдены.")
+    if not offers_service(master, service_id):
+        raise BookingError("Этот мастер не выполняет выбранную услугу.")
     free = get_free_slots(session, master_id, service_id, start_at.date(), now)
     if start_at not in free:
         raise BookingError("К сожалению, это время уже занято. Выберите другое.")
@@ -125,7 +197,9 @@ def create_booking(
         service_id=service_id,
         start_at=start_at,
         end_at=end_at,
-        status=ACTIVE,
+        status=PENDING if prepay_amount > 0 else ACTIVE,
+        prepay_amount=max(prepay_amount, 0),
+        created_at=now,
     )
     session.add(booking)
     session.flush()
@@ -143,11 +217,79 @@ def cancel_booking(
         raise BookingError("Запись не найдена.")
     if tg_id is not None and booking.client.tg_id != tg_id:
         raise BookingError("Это не ваша запись.")
-    if booking.status != ACTIVE:
+    if booking.status not in BLOCKING:
         raise BookingError("Запись уже отменена.")
     booking.status = CANCELLED
     session.flush()
     return booking
+
+
+# ---------- предоплата ----------
+
+
+def confirm_payment(
+    session: Session, booking_id: int, amount: int, charge_id: str, now: datetime
+) -> tuple[Booking | None, str]:
+    """Фиксирует поступившую предоплату. Возвращает (запись, исход):
+
+    confirmed     — запись ждала оплаты и подтверждена;
+    duplicate     — запись уже подтверждена (повторное уведомление об оплате);
+    reactivated   — бронь успела истечь, но время ещё свободно — запись восстановлена;
+    refund_needed — бронь истекла и время уже недоступно: деньги получены, нужен возврат;
+    unknown       — такой записи нет.
+    """
+    booking = session.get(
+        Booking,
+        booking_id,
+        options=[
+            joinedload(Booking.client),
+            joinedload(Booking.service),
+            joinedload(Booking.master),
+        ],
+    )
+    if booking is None:
+        return None, "unknown"
+    if booking.status == ACTIVE:
+        return booking, "duplicate"
+
+    booking.paid_amount = amount
+    booking.payment_charge_id = charge_id
+    if booking.status == PENDING:
+        booking.status = ACTIVE
+        outcome = "confirmed"
+    elif booking.start_at > now and not _overlaps(
+        session, booking.master_id, booking.start_at, booking.end_at
+    ):
+        booking.status = ACTIVE
+        outcome = "reactivated"
+    else:
+        outcome = "refund_needed"
+    session.flush()
+    return booking, outcome
+
+
+def expire_unpaid(session: Session, now: datetime, hold_min: int) -> list[Booking]:
+    """Отменяет брони, которые не оплатили за hold_min минут, и освобождает время."""
+    stmt = (
+        select(Booking)
+        .where(
+            Booking.status == PENDING,
+            Booking.created_at <= now - timedelta(minutes=hold_min),
+        )
+        .options(
+            joinedload(Booking.client),
+            joinedload(Booking.service),
+            joinedload(Booking.master),
+        )
+    )
+    expired = list(session.scalars(stmt).unique())
+    for b in expired:
+        b.status = CANCELLED
+    session.flush()
+    return expired
+
+
+# ---------- выборки ----------
 
 
 def client_bookings(session: Session, tg_id: int, now: datetime) -> list[Booking]:
@@ -156,7 +298,7 @@ def client_bookings(session: Session, tg_id: int, now: datetime) -> list[Booking
         .join(Client)
         .where(
             Client.tg_id == tg_id,
-            Booking.status == ACTIVE,
+            Booking.status.in_(BLOCKING),
             Booking.end_at > now,
         )
         .options(joinedload(Booking.service), joinedload(Booking.master))
@@ -168,7 +310,7 @@ def client_bookings(session: Session, tg_id: int, now: datetime) -> list[Booking
 def upcoming_bookings(session: Session, now: datetime, limit: int = 200) -> list[Booking]:
     stmt = (
         select(Booking)
-        .where(Booking.status == ACTIVE, Booking.end_at > now)
+        .where(Booking.status.in_(BLOCKING), Booking.end_at > now)
         .options(
             joinedload(Booking.client),
             joinedload(Booking.service),
@@ -183,7 +325,7 @@ def upcoming_bookings(session: Session, now: datetime, limit: int = 200) -> list
 def due_reminders(
     session: Session, now: datetime, before_min: int | None = None
 ) -> list[Booking]:
-    """Записи, о которых пора напомнить (и которые ещё не напоминали)."""
+    """Записи, о которых пора напомнить (и которые ещё не напоминали). Неоплаченные брони не в счёт."""
     before = timedelta(minutes=before_min or settings.reminder_before_min)
     stmt = (
         select(Booking)

@@ -61,6 +61,23 @@ class Settings:
     admin_user: str = field(default_factory=lambda: _text("ADMIN_USER", "admin"))
     admin_password: str = field(default_factory=lambda: _text("ADMIN_PASSWORD", "change-me"))
 
+    # Предоплата через Telegram Payments (токен платёжного провайдера выдаёт @BotFather → Payments)
+    payment_provider_token: str = field(default_factory=lambda: _text("PAYMENT_PROVIDER_TOKEN", ""))
+    prepayment_percent: int = field(default_factory=lambda: _int("PREPAYMENT_PERCENT", 0))
+    payment_currency: str = field(default_factory=lambda: _text("PAYMENT_CURRENCY", "RUB").upper())
+    payment_hold_min: int = field(default_factory=lambda: _int("PAYMENT_HOLD_MIN", 15))
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.prepayment_percent <= 100:
+            raise SystemExit("PREPAYMENT_PERCENT должен быть числом от 0 до 100")
+        if self.payment_hold_min < 1:
+            raise SystemExit("PAYMENT_HOLD_MIN должен быть не меньше 1 минуты")
+
+    @property
+    def prepayment_enabled(self) -> bool:
+        """Предоплата включена, только если есть и токен провайдера, и процент."""
+        return bool(self.payment_provider_token) and self.prepayment_percent > 0
+
 
 def now_in_tz(timezone: str) -> datetime:
     """Текущее «настенное» время в часовом поясе бизнеса, без tzinfo."""

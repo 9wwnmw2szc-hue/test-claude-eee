@@ -4,14 +4,16 @@ from __future__ import annotations
 
 from datetime import datetime, time
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, String, Time
+from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Index, String, Table, Time
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from app.config import now_in_tz, settings
 
 # Статусы записи
-ACTIVE = "active"
+ACTIVE = "active"  # подтверждена
+PENDING = "pending_payment"  # время удержано, ждём предоплату
 CANCELLED = "cancelled"
+BLOCKING = (ACTIVE, PENDING)  # статусы, которые занимают время мастера
 
 # Индекс = datetime.weekday()
 WEEKDAYS = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
@@ -23,6 +25,15 @@ def _now() -> datetime:
 
 class Base(DeclarativeBase):
     pass
+
+
+# Какие услуги выполняет мастер. Если у мастера не отмечено ни одной — он выполняет все.
+master_services = Table(
+    "master_services",
+    Base.metadata,
+    Column("master_id", ForeignKey("masters.id", ondelete="CASCADE"), primary_key=True),
+    Column("service_id", ForeignKey("services.id", ondelete="CASCADE"), primary_key=True),
+)
 
 
 class Service(Base):
@@ -46,6 +57,7 @@ class Master(Base):
         cascade="all, delete-orphan",
         order_by="WorkingHours.weekday, WorkingHours.start",
     )
+    services: Mapped[list[Service]] = relationship(secondary=master_services, order_by=Service.id)
 
 
 class WorkingHours(Base):
@@ -67,6 +79,7 @@ class Client(Base):
     tg_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     name: Mapped[str] = mapped_column(String(200), default="")
     username: Mapped[str] = mapped_column(String(64), default="")
+    phone: Mapped[str] = mapped_column(String(32), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
@@ -83,6 +96,11 @@ class Booking(Base):
     status: Mapped[str] = mapped_column(String(16), default=ACTIVE, index=True)
     reminder_sent: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+    # Предоплата, в рублях. prepay_amount — сколько нужно внести, paid_amount — сколько внесено.
+    prepay_amount: Mapped[int] = mapped_column(default=0)
+    paid_amount: Mapped[int] = mapped_column(default=0)
+    payment_charge_id: Mapped[str] = mapped_column(String(128), default="")
 
     client: Mapped[Client] = relationship()
     master: Mapped[Master] = relationship()

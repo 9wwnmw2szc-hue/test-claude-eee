@@ -11,12 +11,18 @@
     <td>
       {{ b.client.name or '—' }}
       {% if b.client.username %}<a class="muted" href="https://t.me/{{ b.client.username }}">@{{ b.client.username }}</a>{% endif %}
+      {% if b.client.phone %}<br><a href="tel:{{ b.client.phone }}">{{ b.client.phone }}</a>{% endif %}
     </td>
     <td>{{ b.service.name }}</td>
     <td>{{ b.master.name }}</td>
-    <td>{{ b.service.price }} ₽</td>
     <td>
-      <form class="inline" method="post" action="/bookings/{{ b.id }}/cancel" onsubmit="return confirm('Отменить запись?')">
+      {{ b.service.price }} ₽
+      {% if b.status == PENDING %}<br><span class="tag">ждёт предоплату {{ b.prepay_amount }} ₽</span>
+      {% elif b.paid_amount %}<br><span class="tag">предоплата {{ b.paid_amount }} ₽</span>{% endif %}
+    </td>
+    <td>
+      <form class="inline" method="post" action="/bookings/{{ b.id }}/cancel"
+            onsubmit="return confirm('Отменить запись?{% if b.paid_amount %} Клиент внёс предоплату {{ b.paid_amount }} ₽ — верните её вручную в кабинете платёжного провайдера.{% endif %}')">
         <button class="danger">Отменить</button>
       </form>
     </td>
